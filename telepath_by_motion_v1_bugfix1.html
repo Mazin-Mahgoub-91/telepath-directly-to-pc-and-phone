@@ -1,0 +1,210 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Telepath by Motion v1</title>
+<style>
+body{background:#000;color:#0ff;font-family:'Cairo',sans-serif;margin:0;padding:20px;text-align:center}
+h1{color:#0ff;margin-bottom:10px}
+#info{color:#ff0;font-size:18px;margin:10px}
+#videoContainer{position:relative;width:640px;height:480px;margin:20px auto;border:3px solid #0ff}
+video, canvas{position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)}
+#qamoos{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;max-width:800px;margin:20px auto}
+.letter{border:2px solid #0ff;padding:18px;font-size:28px;background:#001;transition:0.2s}
+.letter.active{background:#0ff;color:#000;transform:scale(1.1)}
+#output{margin-top:30px;font-size:32px;border:3px solid #0ff;min-height:120px;padding:20px;text-align:right;background:#011;color:#0f0}
+#status{font-size:20px;margin:10px;color:#0f0}
+#blinkCount{font-size:24px;color:#ff0}
+#errorBox{display:none;color:#f00;font-size:20px;border:2px solid #f00;padding:15px;margin:20px auto;max-width:600px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+</head>
+<body>
+<h1>🔮 Telepath by Motion v1</h1>
+<div id="info">رمشة واحدة = اختار الحرف | رمشتين سريع = مسافة | خليك ثابت 3 ثواني = الحرف البعدو</div>
+<div id="status">جاري تشغيل الكاميرا...</div>
+<div id="errorBox"></div>
+<div id="blinkCount">الرمشات: 0</div>
+
+<div id="videoContainer">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="qamoos"></div>
+
+<div id="output">ابدأ بالرمش عشان تكتب جملتك...</div>
+
+<script>
+const arabicLetters = ['ا','ب','ت','ث','ج','ح','خ','د','ذ','ر','ز','س','ش','ص','ض','ط','ظ','ع','غ','ف','ق','ك','ل','م','ن','ه','و','ي'];
+
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const qamoosDiv = document.getElementById('qamoos');
+const outputDiv = document.getElementById('output');
+const statusDiv = document.getElementById('status');
+const blinkCountDiv = document.getElementById('blinkCount');
+const errorBox = document.getElementById('errorBox');
+
+let currentIndex = 0;
+let fullSentence = '';
+let blinkCount = 0;
+let lastBlinkTime = 0;
+let eyeClosed = false;
+let scanning = true;
+let letterTimer = null;
+
+// بناء القاموس
+arabicLetters.forEach((letter, i) => {
+  const div = document.createElement('div');
+  div.className = 'letter';
+  div.textContent = letter;
+  div.id = letter${i};
+  qamoosDiv.appendChild(div);
+});
+
+function showError(msg) {
+  errorBox.style.display = 'block';
+  errorBox.innerHTML = '❌ ' + msg + '<br>تأكد انو الموقع https واديتو إذن الكاميرا';
+  statusDiv.textContent = 'خطأ في الكاميرا';
+}
+
+function highlightLetter() {
+  arabicLetters.forEach((_, i) => {
+    document.getElementById(letter${i}).classList.remove('active');
+  });
+  document.getElementById(letter${currentIndex}).classList.add('active');
+}
+
+function selectLetter() {
+  const chosen = arabicLetters[currentIndex];
+  fullSentence += chosen;
+  outputDiv.textContent = fullSentence;
+  blinkCount++;
+  blinkCountDiv.textContent = الرمشات: ${blinkCount};
+  scanning = false;
+  setTimeout(() => {
+    scanning = true;
+    nextLetter();
+    resetTimer();
+  }, 1500);
+}
+
+function nextLetter() {
+  currentIndex = (currentIndex + 1) % arabicLetters.length;
+  highlightLetter();
+}
+
+function resetTimer() {
+  clearInterval(letterTimer);
+  letterTimer = setInterval(nextLetter, 3000);
+}
+
+function detectBlink(landmarks) {
+  const leftEye = [33, 160, 158, 133, 153, 144];
+  const rightEye = [362, 385, 387, 263, 373, 380];
+  const leftEAR = getEAR(landmarks, leftEye);
+  const rightEAR = getEAR(landmarks, rightEye);
+  const avgEAR = (leftEAR + rightEAR) / 2;
+  const EAR_THRESHOLD = 0.22;
+
+  if(avgEAR < EAR_THRESHOLD) {
+    if(!eyeClosed) {
+      eyeClosed = true;
+      const now = Date.now();
+      if(now - lastBlinkTime < 500) {
+        fullSentence += ' ';
+        outputDiv.textContent = fullSentence;
+      } else if(scanning) {
+        selectLetter();
+      }
+      lastBlinkTime = now;
+    }
+  } else {
+    eyeClosed = false;
+  }
+}
+
+function getEAR(landmarks, eyePoints) {
+  const p1 = landmarks[eyePoints[0]];
+  const p2 = landmarks[eyePoints[1]];
+  const p3 = landmarks[eyePoints[2]];
+  const p4 = landmarks[eyePoints[3]];
+  const p5 = landmarks[eyePoints[4]];
+  const p6 = landmarks[eyePoints[5]];
+  const A = Math.hypot(p2.x - p6.x, p2.y - p6.y);
+  const B = Math.hypot(p3.x - p5.x, p3.y - p5.y);
+  const C = Math.hypot(p1.x - p4.x, p1.y - p4.y);
+  return (A + B) / (2.0 * C);
+}
+
+const faceMesh = new FaceMesh({
+  locateFile: (file) => https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}
+});
+
+faceMesh.setOptions({
+  maxNumFaces: 1,
+  refineLandmarks: true,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
+});
+
+faceMesh.onResults((results) => {
+  if(video.videoWidth > 0) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  if(results.multiFaceLandmarks) {
+    for(const landmarks of results.multiFaceLandmarks) {
+      detectBlink(landmarks);
+      drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: '#00FF00', lineWidth: 1});
+    }
+    statusDiv.textContent = 'الكاميرا شغالة - رمش عشان تكتب';
+  }
+});
+
+// تعديل الـ back-end عشان الكاميرا تطلب إذن
+async function startCamera() {
+  try {
+    // فحص https
+    if(location.protocol!== 'https:' && location.hostname!== 'localhost') {
+      showError('الموقع لازم يكون https عشان الكاميرا تشتغل');
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode: 'user', width: 640, height: 480},
+      audio: false
+    });
+
+    video.srcObject = stream;
+
+    video.onloadedmetadata = () => {
+      video.play();
+      const camera = new Camera(video, {
+        onFrame: async () => {
+          await faceMesh.send({image: video});
+        },
+        width: 640,
+        height: 480
+      });
+      camera.start();
+      statusDiv.textContent = 'جاهز! رمش عشان تبدأ الكتابة';
+      highlightLetter();
+      resetTimer();
+    };
+
+  } catch(err) {
+    showError('ما قدرت أفتح الكاميرا: ' + err.message);
+    console.error(err);
+  }
+}
+
+startCamera();
+</script>
+</body>
+</html>
