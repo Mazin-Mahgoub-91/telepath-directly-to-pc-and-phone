@@ -1,0 +1,238 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Telepath by Motion v1</title>
+<style>
+body{background:#000;color:#0ff;font-family:arial;margin:0;padding:15px;text-align:center}
+h1{color:#0ff;margin:5px 0;font-size:24px}
+#info{color:#ff0;font-size:16px;margin:8px}
+#mainContainer{display:flex;gap:15px;justify-content:center;align-items:flex-start;flex-wrap:wrap}
+#videoContainer{position:relative;width:480px;height:360px;border:3px solid #0ff;flex-shrink:0}
+video, canvas{position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)}
+#qamoos{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;width:280px}
+.letter{border:1px solid #0ff;padding:8px;font-size:18px;background:#001;line-height:1}
+.letter.active{background:#0ff;color:#000}
+#rightPanel{display:flex;flex-direction:column;gap:10px}
+#output{font-size:24px;border:2px solid #0ff;min-height:80px;padding:10px;text-align:right;background:#011;color:#0f0;width:480px}
+#status{font-size:16px;margin:5px;color:#0f0}
+#blinkCount{font-size:18px;color:#ff0}
+#startBtn{background:#0ff;color:#000;border:none;padding:12px 30px;font-size:18px;cursor:pointer;margin:10px}
+#controls{background:#011;border:2px solid #0ff;padding:10px;margin:10px auto;width:480px}
+#controls label{color:#ff0;font-size:16px;margin-left:10px}
+#thresholdSlider{width:300px}
+#thresholdValue{color:#0f0;font-size:18px;font-weight:bold}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/clmtrackr@1.1.2/build/clmtrackr.min.js"></script>
+</head>
+<body>
+<h1>Telepath by Motion v1</h1>
+<div id="info">رمشة واحدة = اختار الحرف | رمشتين سريع = مسافة | خليك ثابت 3 ثواني = الحرف البعدو</div>
+<button id="startBtn">اضغط هنا عشان تشغل الكاميرا</button>
+<div id="status">في انتظار تشغيل الكاميرا...</div>
+<div id="blinkCount">الرمشات: 0</div>
+
+<div id="controls" style="display:none">
+  <label>حساسية الرمش: </label>
+  <input type="range" id="thresholdSlider" min="0.10" max="0.50" step="0.01" value="0.30">
+  <span id="thresholdValue">0.30</span>
+  <div style="font-size:14px;color:#888;margin-top:5px">لو الرمش ما بيتكشف زيد الرقم | لو بيتكشف براهو نقص الرقم</div>
+</div>
+
+<div id="mainContainer">
+  <div id="qamoos"></div>
+
+  <div id="rightPanel">
+    <div id="videoContainer">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="canvas"></canvas>
+    </div>
+    <div id="output">بعد تشغل الكاميرا ابدأ بالرمش...</div>
+  </div>
+</div>
+
+<script>
+var arabicLetters = ['ا','ب','ت','ث','ج','ح','خ','د','ذ','ر','ز','س','ش','ص','ض','ط','ظ','ع','غ','ف','ق','ك','ل','م','ن','ه','و','ي'];
+
+var video = document.getElementById('video');
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+var qamoosDiv = document.getElementById('qamoos');
+var outputDiv = document.getElementById('output');
+var statusDiv = document.getElementById('status');
+var blinkCountDiv = document.getElementById('blinkCount');
+var startBtn = document.getElementById('startBtn');
+var controlsDiv = document.getElementById('controls');
+var thresholdSlider = document.getElementById('thresholdSlider');
+var thresholdValue = document.getElementById('thresholdValue');
+
+var currentIndex = 0;
+var fullSentence = '';
+var blinkCount = 0;
+var lastBlinkTime = 0;
+var eyeClosed = false;
+var scanning = true;
+var letterTimer = null;
+var tracker = null;
+var EAR_THRESHOLD = 0.30;
+var debugCounter = 0;
+
+// بناء القاموس
+for(var i = 0; i < arabicLetters.length; i++) {
+  var div = document.createElement('div');
+  div.className = 'letter';
+  div.innerHTML = arabicLetters[i];
+  div.id = 'letter' + i;
+  qamoosDiv.appendChild(div);
+}
+
+thresholdSlider.oninput = function() {
+  EAR_THRESHOLD = parseFloat(thresholdSlider.value);
+  thresholdValue.innerHTML = EAR_THRESHOLD.toFixed(2);
+}
+
+function highlightLetter() {
+  for(var i = 0; i < arabicLetters.length; i++) {
+    document.getElementById('letter' + i).className = 'letter';
+  }
+  document.getElementById('letter' + currentIndex).className = 'letter active';
+}
+
+function selectLetter() {
+  var chosen = arabicLetters[currentIndex];
+  fullSentence = fullSentence + chosen;
+  outputDiv.innerHTML = fullSentence;
+  blinkCount = blinkCount + 1;
+  blinkCountDiv.innerHTML = 'الرمشات: 0' + blinkCount;
+  console.log('>>> تم اختيار الحرف:', chosen);
+  scanning = false;
+  setTimeout(function() {
+    scanning = true;
+    nextLetter();
+    resetTimer();
+  }, 1500);
+}
+
+function nextLetter() {
+  currentIndex = currentIndex + 1;
+  if(currentIndex >= arabicLetters.length) currentIndex = 0;
+  highlightLetter();
+}
+
+function resetTimer() {
+  clearInterval(letterTimer);
+  letterTimer = setInterval(nextLetter, 3000);
+}
+
+function getEAR(points) {
+  // clmtrackr points: 37-41 العين اليسار، 43-47 العين اليمين
+  var leftEye = [37, 38, 40, 41, 39, 36];
+  var rightEye = [43, 44, 46, 47, 45, 42];
+
+  var p1 = points[leftEye[0]];
+  var p2 = points[leftEye[1]];
+  var p3 = points[leftEye[2]];
+  var p4 = points[leftEye[3]];
+  var p5 = points[leftEye[4]];
+  var p6 = points[leftEye[5]];
+
+  var q1 = points[rightEye[0]];
+  var q2 = points[rightEye[1]];
+  var q3 = points[rightEye[2]];
+  var q4 = points[rightEye[3]];
+  var q5 = points[rightEye[4]];
+  var q6 = points[rightEye[5]];
+
+  if(!p1 ||!q1) return 1;
+
+  var A = Math.sqrt((p2[0]-p6[0])*(p2[0]-p6[0]) + (p2[1]-p6[1])*(p2[1]-p6[1]));
+  var B = Math.sqrt((p3[0]-p5[0])*(p3[0]-p5[0]) + (p3[1]-p5[1])*(p3[1]-p5[1]));
+  var C = Math.sqrt((p1[0]-p4[0])*(p1[0]-p4[0]) + (p1[1]-p4[1])*(p1[1]-p4[1]));
+
+  var D = Math.sqrt((q2[0]-q6[0])*(q2[0]-q6[0]) + (q2[1]-q6[1])*(q2[1]-q6[1]));
+  var E = Math.sqrt((q3[0]-q5[0])*(q3[0]-q5[0]) + (q3[1]-q5[1])*(q3[1]-q5[1]));
+  var F = Math.sqrt((q1[0]-q4[0])*(q1[0]-q4[0]) + (q1[1]-q4[1])*(q1[1]-q4[1]));
+
+  if(C==0 || F==0) return 1;
+  return ((A+B)/(2*C) + (D+E)/(2*F)) / 2;
+}
+
+function detectBlink() {
+  var positions = tracker.getCurrentPosition();
+  if(!positions) return;
+
+  var avgEAR = getEAR(positions);
+
+  debugCounter++;
+  if(debugCounter % 20 == 0) {
+    console.log('EAR:', avgEAR.toFixed(3), 'Threshold:', EAR_THRESHOLD);
+  }
+
+  if(avgEAR < EAR_THRESHOLD) {
+    if(!eyeClosed) {
+      eyeClosed = true;
+      var now = new Date().getTime();
+      console.log('>>> رمشة مكتشفة! EAR:', avgEAR.toFixed(3));
+
+      if(now - lastBlinkTime < 500) {
+        fullSentence = fullSentence + ' ';
+        outputDiv.innerHTML = fullSentence;
+      } else if(scanning) {
+        selectLetter();
+      }
+      lastBlinkTime = now;
+    }
+  } else {
+    eyeClosed = false;
+  }
+}
+
+function drawLoop() {
+  if(tracker && tracker.getCurrentPosition()) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    tracker.draw(canvas);
+    detectBlink();
+    if(!window.faceDetected) {
+      window.faceDetected = true;
+      console.log('>>> الوش اتكشف لأول مرة');
+    }
+  }
+  requestAnimationFrame(drawLoop);
+}
+
+function initCamera() {
+  startBtn.style.display = 'none';
+  statusDiv.innerHTML = 'جاري تشغيل الكاميرا...';
+
+  navigator.mediaDevices.getUserMedia({video: true, audio: false})
+.then(function(stream) {
+    video.srcObject = stream;
+    video.onloadedmetadata = function() {
+      video.play();
+      statusDiv.innerHTML = 'جاري تحميل كشف الوش...';
+
+      tracker = new clm.tracker();
+      tracker.init();
+      tracker.start(video);
+
+      setTimeout(function() {
+        statusDiv.innerHTML = 'الكاميرا شغالة - رمش عشان تكتب';
+        controlsDiv.style.display = 'block';
+        highlightLetter();
+        resetTimer();
+        drawLoop();
+      }, 1000);
+    };
+  })
+.catch(function(err) {
+    statusDiv.innerHTML = 'خطأ: ' + err.message;
+    startBtn.style.display = 'block';
+  });
+}
+
+startBtn.onclick = initCamera;
+</script>
+</body>
+</html>
