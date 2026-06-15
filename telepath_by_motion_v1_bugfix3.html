@@ -1,0 +1,120 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Telepathy v1 - كشف الرمش بالحركة</title>
+<style>
+body{background:#000;color:#0ff;font-family:Arial;text-align:center;padding:20px}
+#video, #canvas{border:3px solid #0ff;width:480px;height:360px}
+.letter{display:inline-block;border:1px solid #0ff;padding:8px;margin:2px;font-size:18px}
+.active{background:#0ff;color:#000}
+#status{margin:10px;font-size:16px;color:#ff0}
+</style>
+</head>
+<body>
+<h1>Telepathy v1</h1>
+<div id="status">اضغط ابدأ وشغل الكاميرا</div>
+<button id="startBtn" style="padding:10px 20px;font-size:16px">ابدأ الكاميرا</button>
+<br><br>
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
+<br>
+<div id="qamoos"></div>
+<div id="output" style="margin-top:20px;font-size:24px;border:2px solid #0ff;min-height:40px;padding:10px"></div>
+
+<script>
+var video = document.getElementById('video');
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+var status = document.getElementById('status');
+var output = document.getElementById('output');
+var qamoos = document.getElementById('qamoos');
+
+var arabicLetters = ['ا','ب','ت','ث','ج','ح','خ','د','ذ','ر','ز','س','ش','ص','ض','ط','ظ','ع','غ','ف','ق','ك','ل','م','ن','ه','و','ي',' '];
+var currentIndex = 0;
+var scanning = false;
+var lastFrame = null;
+var blinkThreshold = 25; // حساسية الحركة
+var blinkCooldown = 0;
+
+function drawLetters() {
+  qamoos.innerHTML = '';
+  arabicLetters.forEach(function(l, i) {
+    var div = document.createElement('div');
+    div.className = 'letter' + (i == currentIndex? ' active' : '');
+    div.textContent = l;
+    qamoos.appendChild(div);
+  });
+}
+
+function detectBlink() {
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  var currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  if (!lastFrame) {
+    lastFrame = currentFrame;
+    return false;
+  }
+
+  // نقيس الحركة في منطقة العين اليسار تقريباً
+  var eyeX = canvas.width * 0.3;
+  var eyeY = canvas.height * 0.35;
+  var eyeW = canvas.width * 0.2;
+  var eyeH = canvas.height * 0.15;
+
+  var diff = 0;
+  for(var y = eyeY; y < eyeY + eyeH; y += 2) {
+    for(var x = eyeX; x < eyeX + eyeW; x += 2) {
+      var idx = (y * canvas.width + x) * 4;
+      var d = Math.abs(currentFrame.data[idx] - lastFrame.data[idx]);
+      diff += d;
+    }
+  }
+
+  lastFrame = currentFrame;
+  var avgDiff = diff / (eyeW * eyeH / 4);
+
+  // لو الحركة عالية معناها رمشة
+  if(avgDiff > blinkThreshold && blinkCooldown == 0) {
+    blinkCooldown = 15; // ما نحسب رمشتين ورا بعض
+    console.log('رمشة! الحركة:', avgDiff.toFixed(1));
+    return true;
+  }
+
+  if(blinkCooldown > 0) blinkCooldown--;
+  return false;
+}
+
+function scan() {
+  if(!scanning) return;
+
+  if(detectBlink()) {
+    output.textContent += arabicLetters[currentIndex];
+    status.textContent = 'تم اختيار: ' + arabicLetters[currentIndex];
+  }
+
+  currentIndex = (currentIndex + 1) % arabicLetters.length;
+  drawLetters();
+  setTimeout(scan, 3000); // كل 3 ثواني حرف
+}
+
+document.getElementById('startBtn').onclick = function() {
+  navigator.mediaDevices.getUserMedia({video: true})
+ .then(function(stream) {
+    video.srcObject = stream;
+    video.onloadedmetadata = function() {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      status.textContent = 'الكاميرا شغالة - رمش عشان تختار الحرف';
+      scanning = true;
+      drawLetters();
+      scan();
+    };
+  })
+ .catch(function(err) {
+    status.textContent = 'خطأ في الكاميرا: ' + err.message;
+  });
+};
+</script>
+</body>
+</html>
