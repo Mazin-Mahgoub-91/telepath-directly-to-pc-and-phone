@@ -1,0 +1,220 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Telepath by Motion v1</title>
+<style>
+body{background:#000;color:#0ff;font-family:arial;margin:0;padding:15px;text-align:center}
+h1{color:#0ff;margin:5px 0;font-size:24px}
+#info{color:#ff0;font-size:15px;margin:8px;line-height:1.6}
+#mainContainer{display:flex;gap:15px;justify-content:center;align-items:flex-start;flex-wrap:wrap}
+#videoContainer{position:relative;width:480px;height:360px;border:3px solid #0ff;flex-shrink:0}
+video, canvas{position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)}
+#qamoos{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;width:280px}
+.letter{border:1px solid #0ff;padding:8px;font-size:18px;background:#001;line-height:1}
+.letter.active{background:#0ff;color:#000;border-width:3px}
+#rightPanel{display:flex;flex-direction:column;gap:10px}
+#output{font-size:24px;border:2px solid #0ff;min-height:80px;padding:10px;text-align:right;background:#011;color:#0f0;width:480px}
+#status{font-size:16px;margin:5px;color:#0f0}
+#blinkCount{font-size:18px;color:#ff0}
+#startBtn{background:#0ff;color:#000;border:none;padding:12px 30px;font-size:18px;cursor:pointer;margin:10px}
+#controls{background:#011;border:2px solid #0ff;padding:10px;margin:10px auto;width:480px}
+#controls label{color:#ff0;font-size:16px;margin-left:10px}
+#thresholdSlider{width:300px}
+#thresholdValue{color:#0f0;font-size:18px;font-weight:bold}
+</style>
+</head>
+<body>
+<h1>Telepath by Motion v1</h1>
+
+<div id="info">
+رمشة واحدة = اختار الحرف | رمشتين سريع = مسافة | كل 3 ثواني الحرف البعدو<br>
+ظبط شريط الحساسية لحدي ما الرمش يتكشف معاك
+</div>
+
+<button id="startBtn">اضغط هنا عشان تشغل الكاميرا</button>
+<div id="status">في انتظار تشغيل الكاميرا...</div>
+<div id="blinkCount">الرمشات: 0</div>
+
+<div id="controls" style="display:none">
+  <label>حساسية الرمش: </label>
+  <input type="range" id="thresholdSlider" min="10" max="50" step="1" value="25">
+  <span id="thresholdValue">25</span>
+  <div style="font-size:14px;color:#888;margin-top:5px">لو الرمش ما بيتكشف نقص الرقم | لو بيتكشف براهو زيد الرقم</div>
+</div>
+
+<div id="mainContainer">
+  <div id="qamoos"></div>
+
+  <div id="rightPanel">
+    <div id="videoContainer">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="canvas"></canvas>
+    </div>
+    <div id="output"></div>
+  </div>
+</div>
+
+<script>
+var arabicLetters = ['ا','ب','ت','ث','ج','ح','خ','د','ذ','ر','ز','س','ش','ص','ض','ط','ظ','ع','غ','ف','ق','ك','ل','م','ن','ه','و','ي'];
+
+var video = document.getElementById('video');
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+var qamoosDiv = document.getElementById('qamoos');
+var outputDiv = document.getElementById('output');
+var statusDiv = document.getElementById('status');
+var blinkCountDiv = document.getElementById('blinkCount');
+var startBtn = document.getElementById('startBtn');
+var controlsDiv = document.getElementById('controls');
+var thresholdSlider = document.getElementById('thresholdSlider');
+var thresholdValue = document.getElementById('thresholdValue');
+
+var currentIndex = 0;
+var fullSentence = '';
+var blinkCount = 0;
+var lastBlinkTime = 0;
+var scanning = true;
+var letterTimer = null;
+var lastFrame = null;
+var blinkThreshold = 25;
+var blinkCooldown = 0;
+
+// بناء القاموس 7x4
+for(var i = 0; i < arabicLetters.length; i++) {
+  var div = document.createElement('div');
+  div.className = 'letter';
+  div.innerHTML = arabicLetters[i];
+  div.id = 'letter' + i;
+  qamoosDiv.appendChild(div);
+}
+
+thresholdSlider.oninput = function() {
+  blinkThreshold = parseInt(thresholdSlider.value);
+  thresholdValue.innerHTML = blinkThreshold;
+}
+
+function highlightLetter() {
+  for(var i = 0; i < arabicLetters.length; i++) {
+    document.getElementById('letter' + i).className = 'letter';
+  }
+  document.getElementById('letter' + currentIndex).className = 'letter active';
+}
+
+function selectLetter() {
+  var chosen = arabicLetters[currentIndex];
+  fullSentence = fullSentence + chosen;
+  outputDiv.innerHTML = fullSentence;
+  blinkCount = blinkCount + 1;
+  blinkCountDiv.innerHTML = 'الرمشات: ' + blinkCount;
+  scanning = false;
+  setTimeout(function() {
+    scanning = true;
+    nextLetter();
+    resetTimer();
+  }, 1500);
+}
+
+function nextLetter() {
+  currentIndex = (currentIndex + 1) % arabicLetters.length;
+  highlightLetter();
+}
+
+function resetTimer() {
+  clearInterval(letterTimer);
+  letterTimer = setInterval(nextLetter, 3000);
+}
+
+function getEyeDiff(currentFrame, lastFrame, eyeX, eyeY, eyeW, eyeH) {
+  var diff = 0;
+  var pixels = 0;
+  for(var y = eyeY; y < eyeY + eyeH; y += 3) {
+    for(var x = eyeX; x < eyeX + eyeW; x += 3) {
+      var idx = (y * canvas.width + x) * 4;
+      var d = Math.abs(currentFrame.data[idx] - lastFrame.data[idx]);
+      diff += d;
+      pixels++;
+    }
+  }
+  return pixels > 0? diff / pixels : 0;
+}
+
+function detectBlink() {
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  var currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  if (!lastFrame) {
+    lastFrame = currentFrame;
+    return false;
+  }
+
+  // العين اليسار
+  var leftX = canvas.width * 0.25;
+  var leftY = canvas.height * 0.35;
+  var eyeW = canvas.width * 0.18;
+  var eyeH = canvas.height * 0.15;
+
+  // العين اليمين
+  var rightX = canvas.width * 0.57;
+  var rightY = canvas.height * 0.35;
+
+  var leftDiff = getEyeDiff(currentFrame, lastFrame, leftX, leftY, eyeW, eyeH);
+  var rightDiff = getEyeDiff(currentFrame, lastFrame, rightX, rightY, eyeW, eyeH);
+  var avgDiff = (leftDiff + rightDiff) / 2;
+
+  lastFrame = currentFrame;
+
+  // كشف الرمش مباشر بدون معايرة
+  if(avgDiff > blinkThreshold && blinkCooldown == 0) {
+    blinkCooldown = 18;
+    var now = new Date().getTime();
+
+    if(now - lastBlinkTime < 500) {
+      fullSentence = fullSentence + ' ';
+      outputDiv.innerHTML = fullSentence;
+    } else if(scanning) {
+      selectLetter();
+    }
+    lastBlinkTime = now;
+    console.log('رمشة! Avg:', avgDiff.toFixed(1), 'Threshold:', blinkThreshold);
+    return true;
+  }
+
+  if(blinkCooldown > 0) blinkCooldown--;
+  return false;
+}
+
+function drawLoop() {
+  if(video.readyState >= 2) {
+    detectBlink();
+  }
+  requestAnimationFrame(drawLoop);
+}
+
+function initCamera() {
+  startBtn.style.display = 'none';
+  statusDiv.innerHTML = 'الكاميرا شغالة - ظبط الحساسية وارمش';
+
+  navigator.mediaDevices.getUserMedia({video: true, audio: false})
+.then(function(stream) {
+    video.srcObject = stream;
+    video.onloadedmetadata = function() {
+      canvas.width = 480;
+      canvas.height = 360;
+      video.play();
+      controlsDiv.style.display = 'block';
+      highlightLetter();
+      resetTimer();
+      drawLoop();
+    };
+  })
+.catch(function(err) {
+    statusDiv.innerHTML = 'خطأ: ' + err.message;
+    startBtn.style.display = 'block';
+  });
+}
+
+startBtn.onclick = initCamera;
+</script>
+</body>
+</html>
